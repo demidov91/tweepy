@@ -7,7 +7,7 @@ import urllib
 import time
 import re
 
-from urllib2 import Request, HTTPError, urlopen
+from urllib2 import Request, HTTPError, urlopen, URLError
 
 from tweepy.error import TweepError
 from tweepy.utils import convert_to_utf8_str
