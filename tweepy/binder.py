@@ -6,6 +6,8 @@ import httplib
 import urllib
 import time
 import re
+from StringIO import StringIO
+import gzip
 
 from urllib2 import Request, HTTPError, urlopen, URLError
 
@@ -27,6 +29,8 @@ def bind_api(**config):
         method = config.get('method', 'GET')
         require_auth = config.get('require_auth', False)
         search_api = config.get('search_api', False)
+        upload_api = config.get('upload_api', False)
+        use_cache = config.get('use_cache', True)
 
         def __init__(self, api, args, kargs):
             # If authentication is required and no credentials
@@ -43,7 +47,9 @@ def bind_api(**config):
             self.build_parameters(args, kargs)
 
             # Pick correct URL root to use
-            if self.search_api:
+            if self.upload_api:
+                self.api_root = api.upload_root
+            elif self.search_api:
                 self.api_root = api.search_root
             else:
                 self.api_root = api.api_root
@@ -56,7 +62,9 @@ def bind_api(**config):
             else:
                 self.scheme = 'http://'
 
-            if self.search_api:
+            if self.upload_api:
+                self.host = api.upload_host
+            elif self.search_api:
                 self.host = api.search_host
             else:
                 self.host = api.host
@@ -64,7 +72,7 @@ def bind_api(**config):
             # Manually set Host header to fix an issue in python 2.5
             # or older where Host is set including the 443 port.
             # This causes Twitter to issue 301 redirect.
-            # See Issue http://github.com/joshthecoder/tweepy/issues/#issue/12
+            # See Issue https://github.com/tweepy/tweepy/issues/12
             self.headers['Host'] = self.host
 
         def build_parameters(self, args, kargs):
@@ -110,7 +118,7 @@ def bind_api(**config):
 
             # Query the cache if one is available
             # and this request uses a GET method.
-            if self.api.cache and self.method == 'GET':
+            if self.use_cache and self.api.cache and self.method == 'GET':
                 cache_result = self.api.cache.get(url)
                 # if cache result found and not expired, return it
                 if cache_result:
@@ -135,18 +143,16 @@ def bind_api(**config):
                             self.method, self.headers, self.parameters
                     )
 
+                # Request compression if configured
+                if self.api.compression:
+                    self.headers['Accept-encoding'] = 'gzip'
+
                 # Execute request
-                # FIXME: add timeout
                 try:
                     req = Request(url=self.scheme + self.host + url, headers=self.headers, data=self.post_data)
                     req.get_method = lambda: self.method
                     resp = urlopen(req)
                     resp.status = hasattr(resp, 'getcode') and resp.getcode() or 200
-                except URLError, e:
-                    if hasattr(e, 'reason'):
-                        resp.status = e.reason
-                    if hasattr(e, 'code'):
-                        resp.status = e.code
                 except Exception, e:
                     raise TweepError('Failed to send request: %s' % e)
 
@@ -170,10 +176,18 @@ def bind_api(**config):
                 raise TweepError(error_msg, resp)
 
             # Parse the response payload
-            result = self.api.parser.parse(self, resp.read())
+            body = resp.read()
+            if resp.headers.get('Content-Encoding', '') == 'gzip':
+                try:
+                    zipper = gzip.GzipFile(fileobj=StringIO(body))
+                    body = zipper.read()
+                except Exception, e:
+                    raise TweepError('Failed to decompress data: %s' % e)
+            result = self.api.parser.parse(self, body)
+
 
             # Store result into cache if one is available.
-            if self.api.cache and self.method == 'GET' and result:
+            if self.use_cache and self.api.cache and self.method == 'GET' and result:
                 self.api.cache.store(url, result)
 
             return result
@@ -188,6 +202,9 @@ def bind_api(**config):
     # Set pagination mode
     if 'cursor' in APIMethod.allowed_param:
         _call.pagination_mode = 'cursor'
+    elif 'max_id' in APIMethod.allowed_param and \
+         'since_id' in APIMethod.allowed_param:
+        _call.pagination_mode = 'id'
     elif 'page' in APIMethod.allowed_param:
         _call.pagination_mode = 'page'
 
