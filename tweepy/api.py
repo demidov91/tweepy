@@ -3,6 +3,7 @@
 # See LICENSE for details.
 
 import os
+import mimetypes
 import imghdr
 import urllib2
 import cStringIO
@@ -714,6 +715,9 @@ class BaseImagePacker(object):
         image must be gif, jpeg, or png
         Object should already have *file* field with file-like object available.
         """
+        image_type = mimetypes.guess_type(self.filepath)[0]
+        if image_type in ('image/gif', 'image/jpeg', 'image/png'):
+            return image_type
         image_type = imghdr.what('', self.file.read())
         self.file.seek(0)
         if image_type == 'gif':
