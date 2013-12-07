@@ -4,6 +4,8 @@
 
 import os
 import mimetypes
+import urllib2
+import cStringIO
 
 from tweepy.binder import bind_api
 from tweepy.error import TweepError
@@ -108,11 +110,12 @@ class API(object):
     )
 
     """ status/update_with_media """
-    def status_update_with_media(self, filename, *args, **kargs):
+    def status_update_with_media(self, filename, status='', is_remote=False):
         """
         " https://dev.twitter.com/docs/api/1.1/post/statuses/update_with_media
         """
-        headers, post_data = API._pack_image(filename, 3072, form_name='media[]')
+        PackClass = RemoteImagePacker if is_remote else LocalImagePacker
+        headers, post_data = PackClass(filename, 3072, is_media=True).pack_image()
         bind_api(
             path = '/statuses/update_with_media.json',
             method = 'POST',
@@ -121,7 +124,7 @@ class API(object):
             require_auth = True,
             upload_api = True,
             secure = True
-        )(self, post_data=post_data, headers=headers, status=kargs.get('status', ''))
+        )(self, post_data=post_data, headers=headers, status=status)
 
     """ statuses/destroy """
     destroy_status = bind_api(
@@ -692,45 +695,93 @@ class API(object):
         payload_type = 'place', payload_list = True,
         allowed_param = ['lat', 'long', 'name', 'contained_within']
     )
-
-    """ Internal use only """
-    @staticmethod
-    def _pack_image(filename, max_size, form_name='image'):
-        """Pack image from file into multipart-formdata post body"""
-        # image must be less than 700kb in size
-        try:
-            if os.path.getsize(filename) > (max_size * 1024):
-                raise TweepError('File is too big, must be less than 700kb.')
-        except os.error:
-            raise TweepError('Unable to access file')
-
+    
+class BaseImagePacker(object):
+    BOUNDARY = 'Tw3ePy'
+    body = ''
+    
+    def __init__(self, filepath, max_size, is_media=False):
+        self.filepath = filepath
+        self.max_size = max_size
+        self.is_media = is_media
+    
+    def _get_type(self):
         # image must be gif, jpeg, or png
-        file_type = mimetypes.guess_type(filename)
+        file_type = mimetypes.guess_type(self.filepath)
         if file_type is None:
             raise TweepError('Could not determine file type')
         file_type = file_type[0]
         if file_type not in ['image/gif', 'image/jpeg', 'image/png']:
             raise TweepError('Invalid file type for image: %s' % file_type)
-
-        # build the mulitpart-formdata body
-        fp = open(filename, 'rb')
-        BOUNDARY = 'Tw3ePy'
+        return file_type
+    
+    def _load_file(self):
+        raise NotImplementedError()
+    
+    def _close_file(self):
+        self.file.close()
+    
+    def _formulate_body(self, image_type):
         body = []
-        body.append('--' + BOUNDARY)
-        body.append('Content-Disposition: form-data; name="{0}"; filename="{1}"'.format(form_name, filename))
-        body.append('Content-Type: %s' % file_type)
+        body.append('--' + self.BOUNDARY)
+        body.append(\
+            'Content-Disposition: form-data; name="{0}"; filename="{1}"'.\
+            format('media[]' if self.is_media else 'image', self.filepath))
+        body.append('Content-Type: %s' % image_type)
         body.append('')
-        body.append(fp.read())
-        body.append('--' + BOUNDARY + '--')
+        body.append(self.file.read())
+        body.append('--' + self.BOUNDARY + '--')
         body.append('')
-        fp.close()
-        body = '\r\n'.join(body)
-
-        # build headers
+        self.body = '\r\n'.join(body)
+    
+    def pack_image(self):
+        """
+        Template method. Returns headers as *dict* and body as *unicode*
+        """
+        self._load_file()
+        self._check_size()
+        self._formulate_body(self._get_type())
+        self._close_file()
         headers = {
-            'Content-Type': 'multipart/form-data; boundary=Tw3ePy',
-            'Content-Length': str(len(body))
+            'Content-Type': 'multipart/form-data; boundary={0}'.format(self.BOUNDARY),
+            'Content-Length': len(self.body)
         }
-
-        return headers, body
+        return headers, self.body
+    
+    
+class LocalImagePacker(BaseImagePacker):
+    def _check_size(self):
+        if os.path.getsize(self.filepath) > (self.max_size * 1024):
+            raise TweepError('File is too big, must be less than {0}kb.'.\
+                format(self.max_size))
+        
+    def _load_file(self):
+        try:
+            self.file = open(self.filepath, 'rb')
+        except os.error:
+            raise TweepError('Unable to access file')
+        
+    
+        
+class RemoteImagePacker(BaseImagePacker):
+    def __init__(self, filepath, max_size, is_media=False):
+        super(RemoteImagePacker, self).__init__(filepath, max_size, is_media)
+        
+    def _load_file(self):
+        try:
+            self.file = cStringIO.StringIO(urllib2.urlopen(self.filepath).read())    
+        except urllib2.HTTPError as e:
+            raise TweepError("Can't open url {0}. Error is: {1}".\
+                format(self.filepath, e))
+        self.filepath = self.filepath.split('/')[-1]
+    
+    def _check_size(self):
+        self.file.seek(0, 2)
+        size = self.file.tell()
+        self.file.seek(0)
+        if size > (self.max_size * 1024):
+            raise TweepError('File is too big, must be less than {0}kb.'.\
+                format(self.max_size))
+        return size
+    
     
