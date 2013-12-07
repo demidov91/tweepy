@@ -3,7 +3,7 @@
 # See LICENSE for details.
 
 import os
-import mimetypes
+import imghdr
 import urllib2
 import cStringIO
 
@@ -112,7 +112,11 @@ class API(object):
     """ status/update_with_media """
     def status_update_with_media(self, filename, status='', is_remote=False):
         """
-        " https://dev.twitter.com/docs/api/1.1/post/statuses/update_with_media
+        /statuses/update_with_media.json
+        :status:  text to twit
+        :filename: path in file system or an url for the image.
+        :is_remote_image: *True* if **image_location** is url,
+         *False* is it was a filepath.
         """
         PackClass = RemoteImagePacker if is_remote else LocalImagePacker
         headers, post_data = PackClass(filename, 3072, is_media=True).pack_image()
@@ -706,14 +710,21 @@ class BaseImagePacker(object):
         self.is_media = is_media
     
     def _get_type(self):
-        # image must be gif, jpeg, or png
-        file_type = mimetypes.guess_type(self.filepath)
-        if file_type is None:
+        """
+        image must be gif, jpeg, or png
+        Object should already have *file* field with file-like object available.
+        """
+        image_type = imghdr.what('', self.file.read())
+        self.file.seek(0)
+        if image_type == 'gif':
+            return 'image/gif'
+        if image_type == 'jpeg':
+            return 'image/jpeg'
+        if image_type == 'png':
+            return 'image/png'
+        if not image_type:
             raise TweepError('Could not determine file type')
-        file_type = file_type[0]
-        if file_type not in ['image/gif', 'image/jpeg', 'image/png']:
-            raise TweepError('Invalid file type for image: %s' % file_type)
-        return file_type
+        raise TweepError('Invalid file type for image: %s' % file_type)
     
     def _load_file(self):
         raise NotImplementedError()
