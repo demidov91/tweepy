@@ -112,7 +112,7 @@ class API(object):
         """
         " https://dev.twitter.com/docs/api/1.1/post/statuses/update_with_media
         """
-        headers, post_data = API._pack_media(filename, 3072)
+        headers, post_data = API._pack_image(filename, 3072, form_name='media[]')
         bind_api(
             path = '/statuses/update_with_media.json',
             method = 'POST',
@@ -695,7 +695,7 @@ class API(object):
 
     """ Internal use only """
     @staticmethod
-    def _pack_image(filename, max_size):
+    def _pack_image(filename, max_size, form_name='image'):
         """Pack image from file into multipart-formdata post body"""
         # image must be less than 700kb in size
         try:
@@ -717,7 +717,7 @@ class API(object):
         BOUNDARY = 'Tw3ePy'
         body = []
         body.append('--' + BOUNDARY)
-        body.append('Content-Disposition: form-data; name="image"; filename="%s"' % filename)
+        body.append('Content-Disposition: form-data; name="{0}"; filename="{1}"'.format(form_name, filename))
         body.append('Content-Type: %s' % file_type)
         body.append('')
         body.append(fp.read())
@@ -734,46 +734,3 @@ class API(object):
 
         return headers, body
     
-    @staticmethod
-    def _pack_media(filename, max_size):
-        """
-        " Pack media from file into multipart-formdata post body
-        " :photo_size_limit
-        " https://dev.twitter.com/docs/api/1.1/get/help/configuration
-        """
-        try:
-            if os.path.getsize(filename) > (max_size * 1024):
-                raise TweepError('File is too big, must be less than %dkb.' % max_size)
-        except os.error, e:
-            raise TweepError('Unable to access file')
-
-        # image must be gif, jpeg, or png
-        file_type = mimetypes.guess_type(filename)
-        if file_type is None:
-            raise TweepError('Could not determine file type')
-        file_type = file_type[0]
-        if file_type not in ['image/gif', 'image/jpeg', 'image/png']:
-            raise TweepError('Invalid file type for image: %s' % file_type)
-
-        # build the mulitpart-formdata body
-        fp = open(filename, 'rb')
-        BOUNDARY = 'Tw3ePy'
-        body = []
-        body.append('--' + BOUNDARY)
-        body.append('Content-Disposition: form-data; name="media[]"; filename="%s"' % filename)
-        body.append('Content-Type: %s' % file_type)
-        body.append('')
-        body.append(fp.read())
-        body.append('--' + BOUNDARY + '--')
-        body.append('')
-        fp.close()
-        body = '\r\n'.join(body)
-
-        # build headers
-        headers = {
-            'Content-Type': 'multipart/form-data; boundary=Tw3ePy',
-            'Content-Length': len(body)
-        }
-
-        return headers, body
-
